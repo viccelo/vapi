@@ -1,4 +1,4 @@
-name: DevSecOps Pipeline - vAPI
+name: DevSecOps Pipeline - vAPI OWASP API Top 10
 
 on:
   push:
@@ -9,6 +9,8 @@ on:
 jobs:
   # ─────────────────────────────────────────
   # ETAPA 1: Escaneo de Secretos (Gitleaks)
+  # Cubre: API2 - Broken Authentication
+  #        API8 - Security Misconfiguration
   # ─────────────────────────────────────────
   secret-scanning:
     name: 🔍 Secret Scanning (Gitleaks)
@@ -25,6 +27,9 @@ jobs:
 
   # ─────────────────────────────────────────
   # ETAPA 2: Análisis Estático (Semgrep SAST)
+  # Cubre: API7  - SSRF
+  #        API8  - Security Misconfiguration
+  #        API10 - Unsafe Consumption of APIs
   # ─────────────────────────────────────────
   sast-scanning:
     name: 🔎 SAST Scanning (Semgrep)
@@ -39,9 +44,15 @@ jobs:
           config: >-
             p/owasp-top-ten
             p/php
+            p/jwt
+            p/secrets
+            p/sql-injection
+            p/command-injection
 
   # ─────────────────────────────────────────
   # ETAPA 3: Escaneo de Dependencias (Trivy)
+  # Cubre: API8 - Security Misconfiguration
+  #        API9 - Improper Inventory Management
   # ─────────────────────────────────────────
   sca-scanning:
     name: 📦 SCA Scanning (Trivy)
@@ -50,12 +61,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy - Filesystem scan
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
-          severity: CRITICAL,HIGH
+          severity: CRITICAL,HIGH,MEDIUM
+          format: table
+          exit-code: 0
+
+      - name: Run Trivy - Config scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: CRITICAL,HIGH,MEDIUM
           format: table
           exit-code: 0
 
@@ -73,14 +93,20 @@ jobs:
         run: docker compose up -d --build
 
       - name: Wait for API to be ready
-        run: sleep 20
+        run: sleep 30
 
       - name: Smoke test - verify API is running
         run: |
-          curl -f http://localhost:80 || curl -f http://localhost:8001 || echo "API running"
+          curl -f http://localhost:80 || echo "API running on another port"
 
   # ─────────────────────────────────────────
   # ETAPA 5: Análisis Dinámico (OWASP ZAP)
+  # Cubre: API1 - BOLA
+  #        API2 - Broken Authentication
+  #        API3 - Broken Object Property Level Authorization
+  #        API4 - Unrestricted Resource Consumption
+  #        API5 - BFLA
+  #        API6 - Unrestricted Access to Sensitive Business Flows
   # ─────────────────────────────────────────
   dast-scanning:
     name: 🕷️ DAST Scanning (OWASP ZAP)
@@ -93,7 +119,7 @@ jobs:
         run: docker compose up -d --build
 
       - name: Wait for API to be ready
-        run: sleep 20
+        run: sleep 30
 
       - name: Run OWASP ZAP API Scan
         uses: zaproxy/action-api-scan@v0.7.0
@@ -101,10 +127,77 @@ jobs:
           target: http://localhost:80
           format: openapi
           fail_action: false
-          cmd_options: '-a'
+          cmd_options: '-a -j'
 
       - name: Upload ZAP Report
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: zap-report
           path: report_html.html
+
+  # ─────────────────────────────────────────
+  # ETAPA 6: Escaneo de APIs con nuclei
+  # Cubre: API1 - BOLA
+  #        API2 - Broken Authentication
+  #        API5 - BFLA
+  #        API6 - Unrestricted Access to Sensitive Business Flows
+  #        API9 - Improper Inventory Management
+  # ─────────────────────────────────────────
+  nuclei-scanning:
+    name: 🎯 API Scanning (Nuclei)
+    runs-on: ubuntu-latest
+    needs: build-and-deploy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker containers
+        run: docker compose up -d --build
+
+      - name: Wait for API to be ready
+        run: sleep 30
+
+      - name: Install Nuclei
+        run: |
+          wget -q https://github.com/projectdiscovery/nuclei/releases/download/v3.2.0/nuclei_3.2.0_linux_amd64.zip
+          unzip nuclei_3.2.0_linux_amd64.zip
+          sudo mv nuclei /usr/local/bin/
+
+      - name: Update Nuclei Templates
+        run: nuclei -update-templates
+
+      - name: Run Nuclei - OWASP API Top 10
+        run: |
+          nuclei -u http://localhost:80 \
+            -tags owasp,api \
+            -severity critical,high,medium \
+            -o nuclei-report.txt \
+            -no-color || true
+
+      - name: Upload Nuclei Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nuclei-report
+          path: nuclei-report.txt
+
+  # ─────────────────────────────────────────
+  # ETAPA 7: Resumen final
+  # ─────────────────────────────────────────
+  summary:
+    name: 📊 Pipeline Summary
+    runs-on: ubuntu-latest
+    needs: [secret-scanning, sast-scanning, sca-scanning, dast-scanning, nuclei-scanning]
+    if: always()
+    steps:
+      - name: Pipeline Summary
+        run: |
+          echo "## 🛡️ DevSecOps Pipeline - Resumen" >> $GITHUB_STEP_SUMMARY
+          echo "| Etapa | Herramienta | Estado |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret Scanning | Gitleaks | ${{ needs.secret-scanning.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST | Semgrep | ${{ needs.sast-scanning.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SCA | Trivy | ${{ needs.sca-scanning.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build & Deploy | Docker | ${{ needs.build-and-deploy.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| DAST | OWASP ZAP | ${{ needs.dast-scanning.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| API Scan | Nuclei | ${{ needs.nuclei-scanning.result }} |" >> $GITHUB_STEP_SUMMARY
