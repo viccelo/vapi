@@ -187,7 +187,7 @@ jobs:
   summary:
     name: 📊 Pipeline Summary
     runs-on: ubuntu-latest
-    needs: [secret-scanning, sast-scanning, sca-scanning, dast-scanning, nuclei-scanning]
+    needs: [secret-scanning, sast-scanning, sca-scanning, build-and-deploy, dast-scanning, nuclei-scanning]
     if: always()
     steps:
       - name: Pipeline Summary
