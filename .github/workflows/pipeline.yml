@@ -90,7 +90,12 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build Docker containers
-        run: docker compose up -d --build
+        run: |
+          for i in 1 2 3 4 5; do
+            docker compose up -d --build && break
+            echo "Intento $i falló (posible 502 de Docker Hub), reintentando en 20s..."
+            sleep 20
+          done
 
       - name: Wait for API to be ready
         run: sleep 30
