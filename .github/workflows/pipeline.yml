@@ -146,8 +146,8 @@ jobs:
           target: http://localhost:8000
           format: openapi
           fail_action: false
+          issue_title: false
           cmd_options: '-a -j'
-          issue_title: ''
 
       - name: Upload ZAP Report
         uses: actions/upload-artifact@v4
